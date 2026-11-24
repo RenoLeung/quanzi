@@ -1292,3 +1292,21 @@ textarea {
 .confirm-actions > * {
   flex: 1;
 }
+
+.info-value-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.info-value-row .info-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-row .mini-btn {
+  flex: 0 0 auto;
+}
