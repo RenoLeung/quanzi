@@ -1237,3 +1237,58 @@ textarea {
     width: 520px;
   }
 }
+/* ---------- 群信息入口列表 ---------- */
+.nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 13px;
+  border-radius: 12px;
+  background: #f7f8fb;
+  border: 1px solid transparent;
+}
+
+.nav-row.on {
+  background: #e8efff;
+  border-color: #c7d7ff;
+}
+
+.nav-row.new {
+  background: #f3f0ff;
+  border-color: #ded7ff;
+  color: #5b3fd0;
+}
+
+.nav-row.danger .nav-row-name {
+  color: var(--danger);
+}
+
+.nav-row-name {
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.nav-row-tag {
+  font-size: 11.5px;
+  color: var(--text-3);
+  flex: 0 0 auto;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.confirm-actions > * {
+  flex: 1;
+}

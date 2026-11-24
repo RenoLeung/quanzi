@@ -5,6 +5,7 @@ import {
   fetchAttachments,
   fetchMessages,
   fetchReads,
+  leaveGroup,
   listMembers,
   markReads,
   recallMessage,
@@ -32,11 +33,22 @@ interface Props {
   onJoinedRefresh: () => Promise<Group[]>
   onSwitchGroup: (groupId: string) => Promise<void>
   onOwnerChange: (v: boolean) => void
+  onCreateGroup: (name: string) => Promise<{ groupId: string; name: string; inviteCode: string } | null>
+  onExitToJoin: () => void
+  onResetIdentity: () => Promise<void>
 }
 
 const RECALL_WINDOW_MS = 2 * 60 * 1000
 
-export default function ChatScreen({ profile, groups, isOwner, onSwitchGroup }: Props) {
+export default function ChatScreen({
+  profile,
+  groups,
+  isOwner,
+  onSwitchGroup,
+  onCreateGroup,
+  onExitToJoin,
+  onResetIdentity,
+}: Props) {
   const me = profile.userId
   const gid = profile.groupId
   const group = groups.find((g) => g.id === gid)
@@ -63,6 +75,10 @@ export default function ChatScreen({ profile, groups, isOwner, onSwitchGroup }: 
   const [inviteCode, setInviteCode] = useState(group?.invite_code || '')
   const [recording, setRecording] = useState(false)
   const [recSecs, setRecSecs] = useState(0)
+  const [showNewGroup, setShowNewGroup] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [confirmKind, setConfirmKind] = useState<null | 'leave' | 'reset'>(null)
   const [, forceTick] = useState(0)
 
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -434,6 +450,38 @@ export default function ChatScreen({ profile, groups, isOwner, onSwitchGroup }: 
     }
   }
 
+  async function doLeaveGroup() {
+    setConfirmKind(null)
+    try {
+      await leaveGroup(gid)
+      toast('已退出这个圈子', 'success')
+      onExitToJoin()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
+  async function doCreateNewGroup() {
+    const name = newGroupName.trim()
+    if (!name) {
+      toast('请输入群名', 'error')
+      return
+    }
+    setCreating(true)
+    try {
+      const res = await onCreateGroup(name)
+      if (res) {
+        setShowNewGroup(false)
+        setShowInfo(false)
+        setNewGroupName('')
+      }
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   async function doResetInvite() {
     try {
       const res = await resetInviteCode(gid)
@@ -490,8 +538,8 @@ export default function ChatScreen({ profile, groups, isOwner, onSwitchGroup }: 
         <button className="icon-btn" onClick={() => setShowSearch(true)} aria-label="搜索">
           🔍
         </button>
-        <button className="icon-btn" onClick={() => setShowInfo(true)} aria-label="群信息">
-          ⋯
+        <button className="icon-btn" onClick={() => setShowInfo(true)} aria-label="群信息与入口">
+          ☰
         </button>
       </header>
 
@@ -644,6 +692,38 @@ export default function ChatScreen({ profile, groups, isOwner, onSwitchGroup }: 
               </div>
 
               <div className="info-block">
+                <div className="info-label">我的圈子</div>
+                <div className="nav-list">
+                  {groups.map((g) => (
+                    <button
+                      key={g.id}
+                      className={`nav-row ${g.id === gid ? 'on' : ''}`}
+                      onClick={() => {
+                        if (g.id === gid) return
+                        setShowInfo(false)
+                        void onSwitchGroup(g.id)
+                      }}
+                    >
+                      <span className="nav-row-name">{g.name}</span>
+                      <span className="nav-row-tag">{g.id === gid ? '当前' : '进入'}</span>
+                    </button>
+                  ))}
+                  {isOwner && (
+                    <button
+                      className="nav-row new"
+                      onClick={() => {
+                        setShowInfo(false)
+                        setShowNewGroup(true)
+                      }}
+                    >
+                      <span className="nav-row-name">＋ 新建圈子</span>
+                      <span className="nav-row-tag">主控人</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="info-block">
                 <div className="info-label">邀请码</div>
                 {isOwner ? (
                   <>
@@ -696,23 +776,29 @@ export default function ChatScreen({ profile, groups, isOwner, onSwitchGroup }: 
                 </button>
               )}
 
-              {groups.length > 1 && (
-                <div className="info-block">
-                  <div className="info-label">切换圈子</div>
-                  {groups.map((g) => (
-                    <button
-                      key={g.id}
-                      className={`group-row ${g.id === gid ? 'on' : ''}`}
-                      onClick={() => {
-                        setShowInfo(false)
-                        void onSwitchGroup(g.id)
-                      }}
-                    >
-                      {g.name}
-                    </button>
-                  ))}
+              <div className="info-block">
+                <div className="info-label">本机</div>
+                <div className="nav-list">
+                  <button
+                    className="nav-row"
+                    onClick={() => {
+                      setShowInfo(false)
+                      onExitToJoin()
+                    }}
+                  >
+                    <span className="nav-row-name">回到入口页</span>
+                    <span className="nav-row-tag">换圈子 / 重新加入</span>
+                  </button>
+                  <button className="nav-row" onClick={() => setConfirmKind('leave')}>
+                    <span className="nav-row-name">退出这个圈子</span>
+                    <span className="nav-row-tag">历史消息保留</span>
+                  </button>
+                  <button className="nav-row danger" onClick={() => setConfirmKind('reset')}>
+                    <span className="nav-row-name">重置本机身份</span>
+                    <span className="nav-row-tag">清除本机登录</span>
+                  </button>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </div>
@@ -728,6 +814,70 @@ export default function ChatScreen({ profile, groups, isOwner, onSwitchGroup }: 
 
       {showSearch && (
         <SearchSheet groupId={gid} onClose={() => setShowSearch(false)} onOpenImage={(u) => setViewerUrl(u)} />
+      )}
+
+      {showNewGroup && (
+        <div className="sheet-mask" onClick={() => setShowNewGroup(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>新建圈子</h3>
+              <button className="icon-btn" onClick={() => setShowNewGroup(false)}>
+                ✕
+              </button>
+            </div>
+            <label className="field">
+              <span className="field-label">群名</span>
+              <input
+                className="input"
+                value={newGroupName}
+                maxLength={30}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                placeholder="例如：老友记"
+              />
+            </label>
+            <button className="btn-primary" disabled={creating} onClick={() => void doCreateNewGroup()}>
+              {creating ? '正在创建…' : '创建并进入'}
+            </button>
+            <p className="sheet-tip">只有主控人能新建圈子，创建后会生成一个新的邀请码。</p>
+          </div>
+        </div>
+      )}
+
+      {confirmKind && (
+        <div className="sheet-mask" onClick={() => setConfirmKind(null)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>{confirmKind === 'leave' ? '退出这个圈子？' : '重置本机身份？'}</h3>
+              <button className="icon-btn" onClick={() => setConfirmKind(null)}>
+                ✕
+              </button>
+            </div>
+            <p className="sheet-tip">
+              {confirmKind === 'leave'
+                ? '退出后你不再是成员，群里的历史消息仍保留；重新用邀请码可以再加入。'
+                : '会清除这台设备上的登录身份与当前圈子，下次进入需要用邀请码重新加入。'}
+            </p>
+            <div className="confirm-actions">
+              <button className="btn-ghost" onClick={() => setConfirmKind(null)}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  if (confirmKind === 'leave') void doLeaveGroup()
+                  else {
+                    setConfirmKind(null)
+                    void onResetIdentity()
+                  }
+                }}
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

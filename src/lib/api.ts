@@ -226,6 +226,12 @@ export async function signUrl(path: string, downloadAs?: string): Promise<string
   return data?.signedUrl ?? null
 }
 
+export async function leaveGroup(groupId: string): Promise<void> {
+  const uid = await currentUserId()
+  const { error } = await supabase.from('members').delete().eq('group_id', groupId).eq('user_id', uid)
+  if (error) throw new Error(error.message)
+}
+
 export async function touchMember(groupId: string): Promise<void> {
   const uid = await currentUserId()
   await supabase.from('members').update({ last_seen_at: new Date().toISOString() }).eq('group_id', groupId).eq('user_id', uid)

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ToastHost, toast } from './components/Toast'
-import { currentUserId, ensureSession, fetchOwnerState, listGroups } from './lib/api'
+import { createGroup, currentUserId, ensureSession, fetchOwnerState, listGroups } from './lib/api'
+import { supabase } from './lib/supabase'
+import { errText } from './lib/errors'
 import type { Group, LocalProfile } from './lib/types'
 import JoinScreen from './screens/Join'
 import ChatScreen from './screens/Chat'
@@ -82,6 +84,43 @@ export default function App() {
     [refreshGroups],
   )
 
+  const handleExitToJoin = useCallback(() => {
+    localStorage.removeItem(PROFILE_KEY)
+    setProfile(null)
+    void refreshGroups()
+  }, [refreshGroups])
+
+  const handleResetIdentity = useCallback(async () => {
+    localStorage.removeItem(PROFILE_KEY)
+    setProfile(null)
+    try {
+      await supabase.auth.signOut()
+    } catch {
+      /* 忽略：本地清理已完成 */
+    }
+    window.location.reload()
+  }, [])
+
+  const handleCreateGroup = useCallback(
+    async (name: string) => {
+      const res = await createGroup(name)
+      if (!res.ok) {
+        toast(errText(res.error), 'error')
+        return null
+      }
+      await refreshGroups()
+      setProfile((prev) => {
+        if (!prev) return prev
+        const next = { ...prev, groupId: res.group_id, groupName: res.name }
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
+        return next
+      })
+      toast(`新圈子已创建，邀请码 ${res.invite_code}`, 'success')
+      return { groupId: res.group_id, name: res.name, inviteCode: res.invite_code }
+    },
+    [refreshGroups],
+  )
+
   if (!ready) {
     return (
       <div className="splash">
@@ -112,6 +151,9 @@ export default function App() {
           onJoinedRefresh={refreshGroups}
           onSwitchGroup={handleSwitchGroup}
           onOwnerChange={setIsOwner}
+          onCreateGroup={handleCreateGroup}
+          onExitToJoin={handleExitToJoin}
+          onResetIdentity={handleResetIdentity}
         />
       ) : (
         <JoinScreen groups={groups} onJoined={handleJoined} onRefreshGroups={refreshGroups} />
