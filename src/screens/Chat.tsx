@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import {
+  adminRenameMember,
+  claimOwner,
   currentUserId,
   fetchAttachments,
   fetchMessages,
   fetchReads,
+  deleteGroup,
+  kickMember,
   leaveGroup,
   listMembers,
   markReads,
+  renameGroup,
+  renameSelf,
   recallMessage,
   resetInviteCode,
   sendAttachment,
@@ -36,6 +42,9 @@ interface Props {
   onCreateGroup: (name: string) => Promise<{ groupId: string; name: string; inviteCode: string } | null>
   onExitToJoin: () => void
   onResetIdentity: () => Promise<void>
+  onNicknameChange: (nickname: string) => void
+  onGroupRenamed: (name: string) => void
+  onGroupDeleted: () => void
 }
 
 const RECALL_WINDOW_MS = 2 * 60 * 1000
@@ -43,11 +52,15 @@ const RECALL_WINDOW_MS = 2 * 60 * 1000
 export default function ChatScreen({
   profile,
   groups,
-  isOwner,
+isOwner,
+  onOwnerChange,
   onSwitchGroup,
   onCreateGroup,
   onExitToJoin,
   onResetIdentity,
+  onNicknameChange,
+  onGroupRenamed,
+  onGroupDeleted,
 }: Props) {
   const me = profile.userId
   const gid = profile.groupId
@@ -78,8 +91,31 @@ export default function ChatScreen({
   const [showNewGroup, setShowNewGroup] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const [creating, setCreating] = useState(false)
-  const [confirmKind, setConfirmKind] = useState<null | 'leave' | 'reset'>(null)
+  const [confirmKind, setConfirmKind] = useState<null | 'leave' | 'reset' | 'kick' | 'deleteGroup'>(null)
+  const [kickTarget, setKickTarget] = useState<Member | null>(null)
+  const [nameTarget, setNameTarget] = useState<Member | null>(null)
+  const [memberNickDraft, setMemberNickDraft] = useState('')
+  const [showClaim, setShowClaim] = useState(false)
+  const [ownerPass, setOwnerPass] = useState('')
+  const [claiming, setClaiming] = useState(false)
+  const [showEditNick, setShowEditNick] = useState(false)
+  const [nickDraft, setNickDraft] = useState(profile.nickname)
+  const [showRenameGroup, setShowRenameGroup] = useState(false)
+  const [groupNameDraft, setGroupNameDraft] = useState(profile.groupName)
+  const [nick, setNick] = useState(profile.nickname)
   const [, forceTick] = useState(0)
+
+  const nickRef = useRef(profile.nickname)
+  useEffect(() => {
+    nickRef.current = nick
+  }, [nick])
+  useEffect(() => {
+    setNick(profile.nickname)
+    setNickDraft(profile.nickname)
+  }, [profile.nickname])
+  useEffect(() => {
+    setGroupNameDraft(profile.groupName)
+  }, [profile.groupName])
 
   const listRef = useRef<HTMLDivElement | null>(null)
   const urlsRef = useRef<Record<string, string>>({})
@@ -215,7 +251,7 @@ export default function ChatScreen({
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           setConn('online')
-          void channel.track({ nickname: profile.nickname })
+          void channel.track({ nickname: nickRef.current })
           void touchMember(gid)
           // 断线重连后补拉一次，避免漏消息
           void loadInitial()
@@ -233,7 +269,7 @@ export default function ChatScreen({
       channelRef.current = null
       void supabase.removeChannel(channel)
     }
-  }, [gid, me, profile.nickname, upsertMessage, nearBottom, scrollToBottom, hydrateUrls, loadInitial])
+  }, [gid, me, upsertMessage, nearBottom, scrollToBottom, hydrateUrls, loadInitial])
 
   // 已读回执：看到别人消息就上报
   useEffect(() => {
@@ -299,7 +335,7 @@ export default function ChatScreen({
       id: `tmp-${cid}`,
       group_id: gid,
       sender_id: me,
-      sender_name: profile.nickname,
+      sender_name: nick,
       kind: 'text',
       body: text,
       recalled_at: null,
@@ -309,7 +345,7 @@ export default function ChatScreen({
     setMessages((prev) => [...prev, optimistic])
     requestAnimationFrame(() => scrollToBottom())
     try {
-      const real = await sendText(gid, profile.nickname, text, cid)
+      const real = await sendText(gid, nick, text, cid)
       upsertMessage(real)
       void touchMember(gid)
     } catch (e) {
@@ -447,6 +483,130 @@ export default function ChatScreen({
       toast('已撤回', 'success')
     } catch (e) {
       toast(errText((e as Error).message), 'error')
+    }
+  }
+
+  async function doRenameSelf() {
+    const nm = nickDraft.trim()
+    if (!nm) {
+      toast('昵称不能为空', 'error')
+      return
+    }
+    if (nm === nick) {
+      setShowEditNick(false)
+      return
+    }
+    try {
+      const res = await renameSelf(gid, nm)
+      if (!res.ok) {
+        toast(errText(res.error), 'error')
+        return
+      }
+      setNick(nm)
+      nickRef.current = nm
+      onNicknameChange(nm)
+      setShowEditNick(false)
+      toast('昵称已更新，新消息将使用新昵称', 'success')
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
+  async function doRenameGroup() {
+    const nm = groupNameDraft.trim()
+    if (!nm) {
+      toast('群名不能为空', 'error')
+      return
+    }
+    try {
+      const res = await renameGroup(gid, nm)
+      if (!res.ok) {
+        toast(errText(res.error), 'error')
+        return
+      }
+      onGroupRenamed(nm)
+      setShowRenameGroup(false)
+      toast('群名已更新', 'success')
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
+  async function doKick() {
+    if (!kickTarget) return
+    try {
+      const res = await kickMember(gid, kickTarget.user_id)
+      if (!res.ok) {
+        toast(errText(res.error), 'error')
+        return
+      }
+      setConfirmKind(null)
+      setKickTarget(null)
+      toast(`已把 ${res.nickname} 移出群聊`, 'success')
+      setMembers(await listMembers(gid))
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
+  async function doAdminRename() {
+    if (!nameTarget) return
+    const nm = memberNickDraft.trim()
+    if (!nm) {
+      toast('昵称不能为空', 'error')
+      return
+    }
+    try {
+      const res = await adminRenameMember(gid, nameTarget.user_id, nm)
+      if (!res.ok) {
+        toast(errText(res.error), 'error')
+        return
+      }
+      setNameTarget(null)
+      toast(`已把「${res.old}」改名为「${res.nickname}」`, 'success')
+      setMembers(await listMembers(gid))
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
+  async function doClaimOwner() {
+    const p = ownerPass.trim()
+    if (!p) {
+      toast('请输入主控口令', 'error')
+      return
+    }
+    setClaiming(true)
+    try {
+      const res = await claimOwner(p)
+      if (!res.ok) {
+        toast(errText(res.error), 'error')
+        return
+      }
+      setShowClaim(false)
+      setOwnerPass('')
+      onOwnerChange(true)
+      toast('主控人身份已更换到这台设备', 'success')
+      setMembers(await listMembers(gid))
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setClaiming(false)
+    }
+  }
+
+  async function doDeleteGroup() {
+    try {
+      const res = await deleteGroup(gid)
+      if (!res.ok) {
+        toast(errText(res.error), 'error')
+        return
+      }
+      setConfirmKind(null)
+      toast('圈子已删除', 'success')
+      onGroupDeleted()
+    } catch (e) {
+      toast((e as Error).message, 'error')
     }
   }
 
@@ -600,7 +760,7 @@ export default function ChatScreen({
               void channelRef.current.send({
                 type: 'broadcast',
                 event: 'typing',
-                payload: { userId: me, nickname: profile.nickname },
+                payload: { userId: me, nickname: nickRef.current },
               })
             }
           }}
@@ -688,7 +848,36 @@ export default function ChatScreen({
             <div className="sheet-body">
               <div className="info-block">
                 <div className="info-label">群名称</div>
-                <div className="info-value">{profile.groupName}</div>
+                <div className="info-value-row">
+                  <span className="info-value">{profile.groupName}</span>
+                  {isOwner && (
+                    <button
+                      className="mini-btn"
+                      onClick={() => {
+                        setGroupNameDraft(profile.groupName)
+                        setShowRenameGroup(true)
+                      }}
+                    >
+                      改群名
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="info-block">
+                <div className="info-label">我的昵称</div>
+                <div className="info-value-row">
+                  <span className="info-value">{nick}</span>
+                  <button
+                    className="mini-btn"
+                    onClick={() => {
+                      setNickDraft(nick)
+                      setShowEditNick(true)
+                    }}
+                  >
+                    改昵称
+                  </button>
+                </div>
               </div>
 
               <div className="info-block">
@@ -764,6 +953,28 @@ export default function ChatScreen({
                         {m.role === 'owner' && <span className="role-tag">主控人</span>}
                         {m.user_id === me && <span className="role-tag me">我</span>}
                       </span>
+{isOwner && m.user_id !== me && (
+                        <button
+                          className="mini-btn ghost"
+                          onClick={() => {
+                            setMemberNickDraft(m.nickname)
+                            setNameTarget(m)
+                          }}
+                        >
+                          改名
+                        </button>
+                      )}
+                      {isOwner && m.user_id !== me && (
+                        <button
+                          className="mini-btn danger"
+                          onClick={() => {
+                            setKickTarget(m)
+                            setConfirmKind('kick')
+                          }}
+                        >
+                          移出
+                        </button>
+                      )}
                       <span className={`presence ${onlineIds.includes(m.user_id) ? 'on' : ''}`} />
                     </div>
                   ))}
@@ -774,6 +985,24 @@ export default function ChatScreen({
                 <button className="sheet-item" onClick={() => void openStorage()}>
                   🗄️ 存储空间管理
                 </button>
+              )}
+
+{!isOwner && (
+                <div className="info-block">
+                  <div className="info-label">主控人</div>
+                  <div className="nav-list">
+                    <button
+                      className="nav-row"
+                      onClick={() => {
+                        setOwnerPass('')
+                        setShowClaim(true)
+                      }}
+                    >
+                      <span className="nav-row-name">用口令接管主控人</span>
+                      <span className="nav-row-tag">换手机 / 找回管理权</span>
+                    </button>
+                  </div>
+                </div>
               )}
 
               <div className="info-block">
@@ -799,6 +1028,18 @@ export default function ChatScreen({
                   </button>
                 </div>
               </div>
+
+              {isOwner && (
+                <div className="info-block">
+                  <div className="info-label">危险操作</div>
+                  <div className="nav-list">
+                    <button className="nav-row danger" onClick={() => setConfirmKind('deleteGroup')}>
+                      <span className="nav-row-name">删除这个圈子</span>
+                      <span className="nav-row-tag">含全部记录与文件</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -814,6 +1055,208 @@ export default function ChatScreen({
 
       {showSearch && (
         <SearchSheet groupId={gid} onClose={() => setShowSearch(false)} onOpenImage={(u) => setViewerUrl(u)} />
+      )}
+
+      {showNewGroup && (
+        <div className="sheet-mask" onClick={() => setShowNewGroup(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>新建圈子</h3>
+              <button className="icon-btn" onClick={() => setShowNewGroup(false)}>
+                ✕
+              </button>
+            </div>
+            <label className="field">
+              <span className="field-label">群名</span>
+              <input
+                className="input"
+                value={newGroupName}
+                maxLength={30}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                placeholder="例如：老友记"
+              />
+            </label>
+            <button className="btn-primary" disabled={creating} onClick={() => void doCreateNewGroup()}>
+              {creating ? '正在创建…' : '创建并进入'}
+            </button>
+            <p className="sheet-tip">只有主控人能新建圈子，创建后会生成一个新的邀请码。</p>
+          </div>
+        </div>
+      )}
+
+      {confirmKind && (
+        <div
+          className="sheet-mask"
+          onClick={() => {
+            setConfirmKind(null)
+            setKickTarget(null)
+          }}
+        >
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>
+                {confirmKind === 'leave' && '退出这个圈子？'}
+                {confirmKind === 'reset' && '重置本机身份？'}
+                {confirmKind === 'kick' && `把 ${kickTarget?.nickname || ''} 移出群聊？`}
+                {confirmKind === 'deleteGroup' && '删除整个圈子？'}
+              </h3>
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  setConfirmKind(null)
+                  setKickTarget(null)
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <p className="sheet-tip">
+              {confirmKind === 'leave' && '退出后你不再是成员，群里的历史消息仍保留；重新用邀请码可以再加入。'}
+              {confirmKind === 'reset' && '会清除这台设备上的登录身份与当前圈子，下次进入需要用邀请码重新加入。'}
+              {confirmKind === 'kick' && '移出后对方立即失去访问权，群里的历史消息保留；要重新发邀请码才能再加入。'}
+              {confirmKind === 'deleteGroup' && '圈子、全部聊天记录和群内文件都会被删除，且无法恢复。'}
+            </p>
+            <div className="confirm-actions">
+              <button
+                className="btn-ghost"
+                onClick={() => {
+                  setConfirmKind(null)
+                  setKickTarget(null)
+                }}
+              >
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  if (confirmKind === 'leave') void doLeaveGroup()
+                  else if (confirmKind === 'kick') void doKick()
+                  else if (confirmKind === 'deleteGroup') void doDeleteGroup()
+                  else {
+                    setConfirmKind(null)
+                    void onResetIdentity()
+                  }
+                }}
+              >
+                {confirmKind === 'deleteGroup' ? '确认删除' : '确定'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showClaim && (
+        <div className="sheet-mask" onClick={() => setShowClaim(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>接管主控人</h3>
+              <button className="icon-btn" onClick={() => setShowClaim(false)}>
+                ✕
+              </button>
+            </div>
+            <p className="hint">口令正确后，主控人身份会更换到这台设备，原来那台设备立即失去管理权。</p>
+            <label className="field">
+              <span className="field-label">主控口令</span>
+              <input
+                className="input"
+                type="password"
+                value={ownerPass}
+                onChange={(e) => setOwnerPass(e.target.value)}
+                placeholder="输入主控口令"
+              />
+            </label>
+            <button className="btn-primary" disabled={claiming} onClick={() => void doClaimOwner()}>
+              {claiming ? '正在更换…' : '确认接管'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {nameTarget && (
+        <div className="sheet-mask" onClick={() => setNameTarget(null)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>改成员昵称</h3>
+              <button className="icon-btn" onClick={() => setNameTarget(null)}>
+                ✕
+              </button>
+            </div>
+            <label className="field">
+              <span className="field-label">当前昵称：{nameTarget.nickname}</span>
+              <input
+                className="input"
+                value={memberNickDraft}
+                maxLength={20}
+                onChange={(e) => setMemberNickDraft(e.target.value)}
+                placeholder="1-20 个字"
+              />
+            </label>
+            <button className="btn-primary" onClick={() => void doAdminRename()}>
+              保存
+            </button>
+            <p className="sheet-tip">只有主控人能改别人的昵称，改后群里会留一条系统提示。</p>
+          </div>
+        </div>
+      )}
+
+      {showEditNick && (
+        <div className="sheet-mask" onClick={() => setShowEditNick(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>改昵称</h3>
+              <button className="icon-btn" onClick={() => setShowEditNick(false)}>
+                ✕
+              </button>
+            </div>
+            <label className="field">
+              <span className="field-label">昵称</span>
+              <input
+                className="input"
+                value={nickDraft}
+                maxLength={20}
+                onChange={(e) => setNickDraft(e.target.value)}
+                placeholder="1-20 个字"
+              />
+            </label>
+            <button className="btn-primary" onClick={() => void doRenameSelf()}>
+              保存
+            </button>
+            <p className="sheet-tip">改后新消息用新昵称，历史消息保留发送时的名字。</p>
+          </div>
+        </div>
+      )}
+
+      {showRenameGroup && (
+        <div className="sheet-mask" onClick={() => setShowRenameGroup(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-head">
+              <h3>改群名</h3>
+              <button className="icon-btn" onClick={() => setShowRenameGroup(false)}>
+                ✕
+              </button>
+            </div>
+            <label className="field">
+              <span className="field-label">群名称</span>
+              <input
+                className="input"
+                value={groupNameDraft}
+                maxLength={30}
+                onChange={(e) => setGroupNameDraft(e.target.value)}
+                placeholder="1-30 个字"
+              />
+            </label>
+            <button className="btn-primary" onClick={() => void doRenameGroup()}>
+              保存
+            </button>
+            <p className="sheet-tip">改名后群里所有人同步看到，并会留下一条系统提示。</p>
+          </div>
+        </div>
       )}
 
       {showNewGroup && (
