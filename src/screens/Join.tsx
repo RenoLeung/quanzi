@@ -155,9 +155,13 @@ export default function JoinScreen({ groups, onJoined, onRefreshGroups }: Props)
       ) : (
         <div className="card join-card">
           <h2 className="card-title">主控人入口</h2>
-          {!ownerState.claimed && (
+          {!ownerState.is_owner && (
             <>
-              <p className="hint">输入主控口令完成认领，认领后这台设备就是圈子的主控人，可生成邀请码。</p>
+              <p className={ownerState.claimed ? 'hint warn' : 'hint'}>
+                {ownerState.claimed
+                  ? '这台设备当前不是主控人。输入主控口令即可把主控人身份更换到这台设备，原设备会立即失去管理权。'
+                  : '输入主控口令完成认领，认领后这台设备就是圈子的主控人，可生成邀请码。'}
+              </p>
               <label className="field">
                 <span className="field-label">主控口令</span>
                 <input
@@ -169,15 +173,9 @@ export default function JoinScreen({ groups, onJoined, onRefreshGroups }: Props)
                 />
               </label>
               <button className="btn-primary" disabled={busy} onClick={doClaim}>
-                {busy ? '正在认领…' : '认领主控人'}
+                {busy ? '正在认领…' : ownerState.claimed ? '用口令更换主控人' : '认领主控人'}
               </button>
             </>
-          )}
-
-          {ownerState.claimed && !ownerState.is_owner && (
-            <p className="hint warn">
-              主控人身份已被另一台设备认领。如需换设备，请在数据库中清空 app_config.owner_user_id 后重新认领。
-            </p>
           )}
 
           {ownerState.is_owner && (
