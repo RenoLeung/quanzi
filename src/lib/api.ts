@@ -232,6 +232,52 @@ export async function leaveGroup(groupId: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
+
+export async function renameGroup(groupId: string, name: string): Promise<RpcResult<{ name: string }>> {
+  const { data, error } = await supabase.rpc('rename_group', { p_group: groupId, p_name: name })
+  if (error) throw new Error(error.message)
+  return data as RpcResult<{ name: string }>
+}
+
+export async function renameSelf(groupId: string, nickname: string): Promise<RpcResult<{ nickname: string }>> {
+  const { data, error } = await supabase.rpc('rename_self', { p_group: groupId, p_nick: nickname })
+  if (error) throw new Error(error.message)
+  return data as RpcResult<{ nickname: string }>
+}
+
+export async function adminRenameMember(
+  groupId: string,
+  userId: string,
+  nickname: string,
+): Promise<RpcResult<{ nickname: string; old: string }>> {
+  const { data, error } = await supabase.rpc('admin_rename_member', {
+    p_group: groupId,
+    p_user: userId,
+    p_nick: nickname,
+  })
+  if (error) throw new Error(error.message)
+  return data as RpcResult<{ nickname: string; old: string }>
+}
+
+export async function kickMember(groupId: string, userId: string): Promise<RpcResult<{ nickname: string }>> {
+  const { data, error } = await supabase.rpc('kick_member', { p_group: groupId, p_user: userId })
+  if (error) throw new Error(error.message)
+  return data as RpcResult<{ nickname: string }>
+}
+
+export async function deleteGroup(groupId: string): Promise<RpcResult> {
+  // 先按官方 Storage API 清掉群内文件（RLS 只放行主控人），再删除群与关联记录
+  const { data: atts } = await supabase.from('attachments').select('path').eq('group_id', groupId)
+  const paths = ((atts || []) as { path: string }[]).map((a) => a.path).filter(Boolean)
+  for (let i = 0; i < paths.length; i += 50) {
+    const { error: rmErr } = await supabase.storage.from(MEDIA_BUCKET).remove(paths.slice(i, i + 50))
+    if (rmErr) throw new Error(`清理群文件失败：${rmErr.message}`)
+  }
+  const { data, error } = await supabase.rpc('delete_group', { p_group: groupId })
+  if (error) throw new Error(error.message)
+  return data as RpcResult
+}
+
 export async function touchMember(groupId: string): Promise<void> {
   const uid = await currentUserId()
   await supabase.from('members').update({ last_seen_at: new Date().toISOString() }).eq('group_id', groupId).eq('user_id', uid)
