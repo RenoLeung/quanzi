@@ -101,6 +101,34 @@ export default function App() {
     window.location.reload()
   }, [])
 
+  const handleNicknameChange = useCallback((nickname: string) => {
+    setProfile((prev) => {
+      if (!prev) return prev
+      const next = { ...prev, nickname }
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
+      return next
+    })
+  }, [])
+
+  const handleGroupRenamed = useCallback(
+    (name: string) => {
+      setProfile((prev) => {
+        if (!prev) return prev
+        const next = { ...prev, groupName: name }
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
+        return next
+      })
+      void refreshGroups()
+    },
+    [refreshGroups],
+  )
+
+  const handleGroupDeleted = useCallback(() => {
+    localStorage.removeItem(PROFILE_KEY)
+    setProfile(null)
+    void refreshGroups()
+  }, [refreshGroups])
+
   const handleCreateGroup = useCallback(
     async (name: string) => {
       const res = await createGroup(name)
@@ -154,6 +182,9 @@ export default function App() {
           onCreateGroup={handleCreateGroup}
           onExitToJoin={handleExitToJoin}
           onResetIdentity={handleResetIdentity}
+          onNicknameChange={handleNicknameChange}
+          onGroupRenamed={handleGroupRenamed}
+          onGroupDeleted={handleGroupDeleted}
         />
       ) : (
         <JoinScreen groups={groups} onJoined={handleJoined} onRefreshGroups={refreshGroups} />
